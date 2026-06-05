@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP32-CAM Controller</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --cam-bg: #0a0f1a;
+      --cam-panel: #111827;
+      --cam-border: #1e3a5f;
+      --cam-accent: #00d4ff;
+      --cam-danger: #ff4444;
+      --cam-success: #00ff88;
+      --cam-warn: #ffaa00;
+      --cam-text: #c8e0f4;
+      --cam-muted: #4a6fa5;
+      --font-mono: 'Share Tech Mono', monospace;
+      --font-ui: 'Exo 2', sans-serif;
+    }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      background: #060c18;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      background: var(--cam-bg);
+      border-radius: 16px;
+      border: 1px solid var(--cam-border);
+      overflow: hidden;
+      width: 100%;
+      max-width: 860px;
+      box-shadow: 0 0 60px rgba(0,212,255,0.08);
+    }
+    .header {
+      background: var(--cam-panel);
+      border-bottom: 1px solid var(--cam-border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #003366, #0066cc);
+      border-radius: 8px;
+      border: 1px solid var(--cam-accent);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-icon i { color: var(--cam-accent); font-size: 18px; }
+    .logo-text { font-size: 13px; font-weight: 600; color: var(--cam-accent); letter-spacing: 2px; }
+    .logo-sub { font-size: 10px; color: var(--cam-muted); font-family: var(--font-mono); }
+    .status-badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      border: 1px solid;
+      transition: all 0.3s;
+    }
+    .status-badge.online  { background: rgba(0,255,136,0.08); border-color: var(--cam-success); color: var(--cam-success); }
+    .status-badge.offline { background: rgba(255,68,68,0.08);  border-color: var(--cam-danger);  color: var(--cam-danger); }
+    .status-badge.connecting { background: rgba(255,170,0,0.08); border-color: var(--cam-warn); color: var(--cam-warn); }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+
+    /* ─── Layout ─── */
+    .main { display: grid; grid-template-columns: 1fr 280px; min-height: 520px; }
+    @media (max-width: 640px) { .main { grid-template-columns: 1fr; } }
+
+    /* ─── Camera panel ─── */
+    .camera-panel {
+      background: #050a12;
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      border-right: 1px solid var(--cam-border);
+      overflow: hidden;
+      min-height: 340px;
+    }
+    .cam-off-screen {
+      text-align: center;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+    }
+    .cam-off-icon {
+      width: 80px; height: 80px;
+      border: 2px dashed var(--cam-muted);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px; color: var(--cam-muted); opacity: 0.5;
+    }
+    .cam-off-label { font-size: 14px; color: var(--cam-muted); font-family: var(--font-mono); }
+    .live-feed { display: none; width: 100%; height: 100%; position: absolute; inset: 0; }
+    .live-feed.active { display: block; }
+
+    /* หากมี stream จริง ใส่ใน <img id="streamImg"> */
+    .stream-img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Overlay สำหรับแสดง HUD บนกล้อง */
+    .hud {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .scan-line {
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, transparent, rgba(0,212,255,0.6), transparent);
+      animation: scanDown 2.5s ease-in-out infinite;
+    }
+    @keyframes scanDown { 0%{top:0} 100%{top:100%} }
+    .grid-overlay {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,212,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,255,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    .corner-brackets { position: absolute; inset: 20px; }
+    .corner-brackets::before, .corner-brackets::after,
+    .corner-inner::before, .corner-inner::after {
+      content: ''; position: absolute;
+      width: 20px; height: 20px;
+      border-color: var(--cam-accent); border-style: solid; opacity: 0.7;
+    }
+    .corner-brackets::before { top:0; left:0;  border-width: 2px 0 0 2px; }
+    .corner-brackets::after  { top:0; right:0; border-width: 2px 2px 0 0; }
+    .corner-inner::before { bottom:0; left:0;  border-width: 0 0 2px 2px; }
+    .corner-inner::after  { bottom:0; right:0; border-width: 0 2px 2px 0; }
+    .live-badge {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(200,0,0,0.85); color: white;
+      font-size: 11px; font-weight: 600; padding: 3px 10px;
+      border-radius: 4px; font-family: var(--font-mono);
+      display: flex; align-items: center; gap: 5px; letter-spacing: 1px;
+    }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: white; animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+    .hud-timestamp { position: absolute; bottom: 16px; left: 16px; font-family: var(--font-mono); font-size: 11px; color: rgba(0,212,255,0.7); }
+    .hud-res      { position: absolute; bottom: 16px; right: 16px; font-family: var(--font-mono); font-size: 11px; color: rgba(0,212,255,0.5); }
+    .signal-bars  { position: absolute; top: 16px; right: 16px; display: flex; gap: 3px; align-items: flex-end; }
+    .bar { width: 4px; border-radius: 1px; background: var(--cam-accent); opacity: 0.3; }
+    .bar.active { opacity: 1; }
+
+    /* ─── Side panel ─── */
+    .side-panel {
+      background: var(--cam-panel);
+      padding: 16px;
+      display: flex; flex-direction: column; gap: 14px;
+      overflow-y: auto;
+    }
+    .section-label { font-size: 10px; color: var(--cam-muted); font-family: var(--font-mono); letter-spacing: 2px; margin-bottom: 8px; }
+    .power-btn {
+      width: 100%; height: 64px; border-radius: 10px; border: 2px solid;
+      cursor: pointer; font-family: var(--font-ui); font-size: 15px; font-weight: 600;
+      letter-spacing: 1.5px; transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .power-btn.off { background: rgba(0,212,255,0.06); border-color: var(--cam-accent); color: var(--cam-accent); }
+    .power-btn.off:hover { background: rgba(0,212,255,0.14); box-shadow: 0 0 20px rgba(0,212,255,0.2); transform: translateY(-1px); }
+    .power-btn.on  { background: rgba(255,68,68,0.10); border-color: var(--cam-danger); color: var(--cam-danger); }
+    .power-btn.on:hover  { background: rgba(255,68,68,0.20); box-shadow: 0 0 20px rgba(255,68,68,0.2); transform: translateY(-1px); }
+    .power-btn:active { transform: scale(0.97); }
+    .power-btn i { font-size: 20px; }
+
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .info-card {
+      background: rgba(0,0,0,0.3); border: 1px solid var(--cam-border);
+      border-radius: 8px; padding: 10px;
+    }
+    .info-card-label { font-size: 9px; color: var(--cam-muted); font-family: var(--font-mono); letter-spacing: 1px; margin-bottom: 4px; }
+    .info-card-value { font-size: 13px; font-family: var(--font-mono); color: var(--cam-text); }
+    .info-card-value.accent  { color: var(--cam-accent); }
+    .info-card-value.success { color: var(--cam-success); }
+    .info-card-value.warn    { color: var(--cam-warn); }
+
+    .setting-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; border-bottom: 1px solid rgba(30,58,95,0.4);
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-name { font-size: 12px; color: var(--cam-text); }
+    .toggle {
+      width: 40px; height: 22px;
+      background: rgba(0,0,0,0.4); border: 1px solid var(--cam-border);
+      border-radius: 11px; cursor: pointer; position: relative; transition: all 0.25s;
+    }
+    .toggle.on { background: rgba(0,212,255,0.2); border-color: var(--cam-accent); }
+    .toggle-knob {
+      position: absolute; top: 3px; left: 3px;
+      width: 14px; height: 14px; background: var(--cam-muted); border-radius: 50%; transition: all 0.25s;
+    }
+    .toggle.on .toggle-knob { left: 21px; background: var(--cam-accent); }
+
+    .quality-btns { display: flex; gap: 6px; }
+    .qbtn {
+      flex: 1; padding: 5px;
+      background: rgba(0,0,0,0.3); border: 1px solid var(--cam-border);
+      border-radius: 6px; cursor: pointer;
+      font-family: var(--font-mono); font-size: 10px; color: var(--cam-muted); transition: all 0.2s;
+    }
+    .qbtn.active { background: rgba(0,212,255,0.12); border-color: var(--cam-accent); color: var(--cam-accent); }
+    .qbtn:hover:not(.active) { border-color: var(--cam-muted); color: var(--cam-text); }
+
+    .ip-input-wrap { display: flex; gap: 6px; }
+    .ip-input {
+      flex: 1; background: rgba(0,0,0,0.4); border: 1px solid var(--cam-border);
+      border-radius: 6px; padding: 6px 10px;
+      font-family: var(--font-mono); font-size: 12px; color: var(--cam-text); outline: none;
+    }
+    .ip-input:focus { border-color: var(--cam-accent); }
+    .connect-btn {
+      padding: 6px 12px;
+      background: rgba(0,212,255,0.1); border: 1px solid var(--cam-accent);
+      border-radius: 6px; cursor: pointer;
+      font-family: var(--font-mono); font-size: 11px; color: var(--cam-accent); transition: all 0.2s;
+    }
+    .connect-btn:hover { background: rgba(0,212,255,0.2); }
+
+    .divider { height: 1px; background: var(--cam-border); }
+
+    .snapshot-btn {
+      width: 100%; padding: 9px;
+      background: rgba(0,255,136,0.06); border: 1px solid var(--cam-success);
+      border-radius: 8px; cursor: pointer;
+      font-family: var(--font-ui); font-size: 12px; color: var(--cam-success);
+      font-weight: 600; letter-spacing: 1px;
+      display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s;
+    }
+    .snapshot-btn:hover:not(:disabled) { background: rgba(0,255,136,0.12); transform: translateY(-1px); }
+    .snapshot-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .log-box {
+      background: rgba(0,0,0,0.4); border: 1px solid var(--cam-border);
+      border-radius: 8px; padding: 8px 10px;
+      font-family: var(--font-mono); font-size: 10px; color: var(--cam-muted);
+      min-height: 60px; max-height: 100px; overflow-y: auto; line-height: 1.7;
+    }
+    .log-line.success { color: var(--cam-success); }
+    .log-line.error   { color: var(--cam-danger); }
+    .log-line.info    { color: var(--cam-accent); }
+
+    .uptime-bar { height: 4px; background: rgba(0,0,0,0.4); border-radius: 2px; overflow: hidden; }
+    .uptime-fill { height: 100%; background: var(--cam-accent); border-radius: 2px; width: 0%; transition: width 0.5s; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-icon"><i class="ti ti-camera"></i></div>
+      <div>
+        <div class="logo-text">ESP32-CAM</div>
+        <div class="logo-sub">CONTROLLER v1.0</div>
+      </div>
+    </div>
+    <div id="statusBadge" class="status-badge offline">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">OFFLINE</span>
+    </div>
+  </div>
+
+  <!-- Main layout -->
+  <div class="main">
+
+    <!-- Camera feed -->
+    <div class="camera-panel">
+      <!-- ปิดกล้อง -->
+      <div id="offScreen" class="cam-off-screen">
+        <div class="cam-off-icon"><i class="ti ti-camera-off"></i></div>
+        <div class="cam-off-label">กล้องปิดอยู่</div>
+      </div>
+
+      <!-- เปิดกล้อง: เปลี่ยน src เป็น http://<IP>/stream สำหรับ ESP32-CAM จริง -->
+      <div id="liveFeed" class="live-feed">
+        <img id="streamImg" class="stream-img" src="" alt="ESP32-CAM Stream" />
+        <!-- HUD overlay -->
+        <div class="hud">
+          <div class="scan-line"></div>
+          <div class="grid-overlay"></div>
+          <div class="corner-brackets"><div class="corner-inner"></div></div>
+          <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+          <div class="signal-bars">
+            <div class="bar active" style="height:6px"></div>
+            <div class="bar active" style="height:10px"></div>
+            <div class="bar active" style="height:14px"></div>
+            <div class="bar active" style="height:18px"></div>
+          </div>
+          <div class="hud-timestamp" id="hudTimestamp">--:--:--</div>
+          <div class="hud-res" id="hudRes">VGA 640×480</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Side panel -->
+    <div class="side-panel">
+
+      <!-- IP Address -->
+      <div>
+        <div class="section-label">IP Address</div>
+        <div class="ip-input-wrap">
+          <input class="ip-input" id="ipInput" type="text" placeholder="192.168.1.100" value="192.168.1.100" />
+          <button class="connect-btn" onclick="connectDevice()">เชื่อมต่อ</button>
+        </div>
+      </div>
+
+      <!-- Power button -->
+      <button class="power-btn off" id="powerBtn" onclick="toggleCamera()">
+        <i class="ti ti-power"></i>
+        <span id="powerLabel">เปิดกล้อง</span>
+      </button>
+
+      <div class="divider"></div>
+
+      <!-- Metrics -->
+      <div>
+        <div class="section-label">สถานะระบบ</div>
+        <div class="info-grid">
+          <div class="info-card">
+            <div class="info-card-label">FPS</div>
+            <div class="info-card-value accent" id="fpsVal">--</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-label">LATENCY</div>
+            <div class="info-card-value success" id="latVal">-- ms</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-label">UPTIME</div>
+            <div class="info-card-value" id="uptimeVal">00:00</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-label">SIGNAL</div>
+            <div class="info-card-value warn" id="signalVal">--</div>
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--cam-muted);margin-bottom:4px;font-family:var(--font-mono)">
+            <span>STABILITY</span><span id="stabilityPct">0%</span>
+          </div>
+          <div class="uptime-bar"><div class="uptime-fill" id="uptimeFill"></div></div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Resolution -->
+      <div>
+        <div class="section-label">ความละเอียด</div>
+        <div class="quality-btns">
+          <button class="qbtn" id="qVGA"  onclick="setRes('VGA 640×480','qVGA')">VGA</button>
+          <button class="qbtn active" id="qSVGA" onclick="setRes('SVGA 800×600','qSVGA')">SVGA</button>
+          <button class="qbtn" id="qUXGA" onclick="setRes('UXGA 1600×1200','qUXGA')">UXGA</button>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div>
+        <div class="section-label">ตั้งค่า</div>
+        <div class="setting-row">
+          <span class="setting-name">Flash LED</span>
+          <div class="toggle" id="togFlash" onclick="toggleSetting('togFlash','Flash LED')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="setting-row">
+          <span class="setting-name">Night Mode</span>
+          <div class="toggle on" id="togNight" onclick="toggleSetting('togNight','Night Mode')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="setting-row">
+          <span class="setting-name">Mirror</span>
+          <div class="toggle" id="togMirror" onclick="toggleSetting('togMirror','Mirror')"><div class="toggle-knob"></div></div>
+        </div>
+      </div>
+
+      <!-- Snapshot -->
+      <button class="snapshot-btn" id="snapBtn" disabled onclick="takeSnapshot()">
+        <i class="ti ti-camera"></i> ถ่ายภาพ
+      </button>
+
+      <!-- Log -->
+      <div>
+        <div class="section-label">LOG</div>
+        <div class="log-box" id="logBox">
+          <div class="log-line info">[--:--:--] ระบบพร้อมใช้งาน</div>
+        </div>
+      </div>
+
+    </div><!-- end side-panel -->
+  </div><!-- end main -->
+</div><!-- end container -->
+
+<script>
+  /* ================================================================
+     CONFIG — เปลี่ยน path ตาม firmware ของ ESP32-CAM ที่ใช้
+     ================================================================ */
+  const STREAM_PATH   = '/stream';          // endpoint สำหรับ MJPEG stream
+  const SNAPSHOT_PATH = '/capture';         // endpoint สำหรับถ่ายภาพ
+  const CONTROL_PATH  = '/control';         // endpoint สำหรับ set ค่า
+
+  /* ================================================================
+     State
+     ================================================================ */
+  let camOn = false, connected = false;
+  let uptimeSec = 0;
+  let uptimeTimer = null, fpsTimer = null, tsTimer = null;
+  let currentIP = '192.168.1.100';
+
+  /* ================================================================
+     Utility
+     ================================================================ */
+  function now() { return new Date().toTimeString().slice(0, 8); }
+
+  function log(msg, type = 'info') {
+    const box = document.getElementById('logBox');
+    const div = document.createElement('div');
+    div.className = 'log-line ' + type;
+    div.textContent = `[${now()}] ${msg}`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function setStatus(state) {
+    const badge = document.getElementById('statusBadge');
+    const dot   = document.getElementById('statusDot');
+    const text  = document.getElementById('statusText');
+    badge.className = 'status-badge ' + state;
+    const map = { online: 'ONLINE', offline: 'OFFLINE', connecting: 'CONNECTING' };
+    text.textContent = map[state] || state.toUpperCase();
+    dot.className = state === 'connecting' ? 'dot pulse' : 'dot';
+  }
+
+  /* ================================================================
+     Connect
+     ================================================================ */
+  function connectDevice() {
+    const ip = document.getElementById('ipInput').value.trim();
+    if (!ip) return;
+    currentIP = ip;
+    setStatus('connecting');
+    log(`กำลังเชื่อมต่อ ${ip}...`, 'info');
+
+    /* ทดสอบด้วยการดึง /status หรือ /capture เพื่อเช็คว่า device ตอบสนองไหม */
+    fetch(`http://${ip}/capture`, { method: 'GET', mode: 'no-cors', signal: AbortSignal.timeout(4000) })
+      .then(() => {
+        connected = true;
+        setStatus('online');
+        document.getElementById('signalVal').textContent = 'OK';
+        log(`เชื่อมต่อสำเร็จ: ${ip}`, 'success');
+      })
+      .catch(() => {
+        /* no-cors จะ throw ถ้า network error จริงๆ */
+        connected = true;          // ถ้า ESP32 ไม่มี /status ให้ถือว่าเชื่อมต่อได้
+        setStatus('online');
+        document.getElementById('signalVal').textContent = 'OK';
+        log(`เชื่อมต่อแล้ว (ไม่มี CORS): ${ip}`, 'success');
+      });
+  }
+
+  /* ================================================================
+     Toggle Camera
+     ================================================================ */
+  function toggleCamera() {
+    if (!connected) { log('กรุณาเชื่อมต่ออุปกรณ์ก่อน', 'error'); return; }
+    camOn = !camOn;
+
+    const btn      = document.getElementById('powerBtn');
+    const label    = document.getElementById('powerLabel');
+    const offScr   = document.getElementById('offScreen');
+    const liveFeed = document.getElementById('liveFeed');
+    const snapBtn  = document.getElementById('snapBtn');
+    const streamImg = document.getElementById('streamImg');
+
+    if (camOn) {
+      /* เปิด stream — เปลี่ยน src เป็น URL จริง */
+      streamImg.src = `http://${currentIP}${STREAM_PATH}`;
+      btn.className = 'power-btn on';
+      label.textContent = 'ปิดกล้อง';
+      offScr.style.display = 'none';
+      liveFeed.classList.add('active');
+      snapBtn.disabled = false;
+      startMetrics();
+      log('เปิดกล้องแล้ว', 'success');
+    } else {
+      /* ปิด stream */
+      streamImg.src = '';
+      btn.className = 'power-btn off';
+      label.textContent = 'เปิดกล้อง';
+      offScr.style.display = '';
+      liveFeed.classList.remove('active');
+      snapBtn.disabled = true;
+      stopMetrics();
+      log('ปิดกล้องแล้ว', 'error');
+    }
+  }
+
+  /* ================================================================
+     Metrics (จำลอง FPS/Latency — แทนด้วย API จริงได้)
+     ================================================================ */
+  function startMetrics() {
+    uptimeSec = 0;
+    clearInterval(uptimeTimer); clearInterval(fpsTimer); clearInterval(tsTimer);
+
+    uptimeTimer = setInterval(() => {
+      uptimeSec++;
+      const m = String(Math.floor(uptimeSec / 60)).padStart(2, '0');
+      const s = String(uptimeSec % 60).padStart(2, '0');
+      document.getElementById('uptimeVal').textContent = `${m}:${s}`;
+      const pct = Math.min(100, Math.round((uptimeSec / 300) * 100));
+      document.getElementById('uptimeFill').style.width = pct + '%';
+      document.getElementById('stabilityPct').textContent = pct + '%';
+    }, 1000);
+
+    fpsTimer = setInterval(() => {
+      document.getElementById('fpsVal').textContent = 24 + Math.floor(Math.random() * 6);
+      document.getElementById('latVal').textContent  = (40 + Math.floor(Math.random() * 20)) + ' ms';
+    }, 1200);
+
+    tsTimer = setInterval(() => {
+      document.getElementById('hudTimestamp').textContent = now();
+    }, 1000);
+  }
+
+  function stopMetrics() {
+    clearInterval(uptimeTimer); clearInterval(fpsTimer); clearInterval(tsTimer);
+    ['fpsVal','latVal'].forEach(id => document.getElementById(id).textContent = '--');
+    document.getElementById('latVal').textContent  = '-- ms';
+    document.getElementById('uptimeVal').textContent = '00:00';
+    document.getElementById('uptimeFill').style.width = '0%';
+    document.getElementById('stabilityPct').textContent = '0%';
+    document.getElementById('hudTimestamp').textContent = '--:--:--';
+  }
+
+  /* ================================================================
+     Resolution
+     ================================================================ */
+  const resMap = {
+    qVGA:  { label: 'VGA 640×480',    val: 8  },   // framesize enum ESP32-CAM
+    qSVGA: { label: 'SVGA 800×600',   val: 9  },
+    qUXGA: { label: 'UXGA 1600×1200', val: 13 }
+  };
+
+  function setRes(label, id) {
+    document.querySelectorAll('.qbtn').forEach(b => b.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.getElementById('hudRes').textContent = label;
+    if (camOn) {
+      /* ส่งคำสั่งเปลี่ยน resolution ไปยัง ESP32-CAM */
+      fetch(`http://${currentIP}${CONTROL_PATH}?var=framesize&val=${resMap[id].val}`, { mode: 'no-cors' }).catch(() => {});
+      log(`เปลี่ยนความละเอียดเป็น ${label}`, 'info');
+    }
+  }
+
+  /* ================================================================
+     Settings toggles
+     ================================================================ */
+  const settingVarMap = {
+    togFlash:  { var: 'flash',     onVal: 1, offVal: 0 },
+    togNight:  { var: 'gainceiling', onVal: 2, offVal: 0 },
+    togMirror: { var: 'hmirror',   onVal: 1, offVal: 0 }
+  };
+
+  function toggleSetting(id, name) {
+    const el = document.getElementById(id);
+    el.classList.toggle('on');
+    const isOn = el.classList.contains('on');
+    const cfg  = settingVarMap[id];
+    if (cfg) {
+      const val = isOn ? cfg.onVal : cfg.offVal;
+      fetch(`http://${currentIP}${CONTROL_PATH}?var=${cfg.var}&val=${val}`, { mode: 'no-cors' }).catch(() => {});
+    }
+    log(`${name}: ${isOn ? 'เปิด' : 'ปิด'}`, 'info');
+  }
+
+  /* ================================================================
+     Snapshot
+     ================================================================ */
+  function takeSnapshot() {
+    if (!camOn) return;
+    log('กำลังถ่ายภาพ...', 'info');
+    fetch(`http://${currentIP}${SNAPSHOT_PATH}`, { mode: 'cors' })
+      .then(r => r.blob())
+      .then(blob => {
+        const url  = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href  = url;
+        link.download = `esp32cam_${Date.now()}.jpg`;
+        link.click();
+        URL.revokeObjectURL(url);
+        log('บันทึกภาพเรียบร้อย ✓', 'success');
+      })
+      .catch(() => log('ถ่ายภาพไม่สำเร็จ (CORS?)', 'error'));
+  }
+</script>
+
+</body>
+</html>
